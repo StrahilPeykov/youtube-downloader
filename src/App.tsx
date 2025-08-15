@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, Youtube, AlertCircle, CheckCircle, Loader, ExternalLink, Copy } from 'lucide-react';
+import { Download, Youtube, AlertCircle, CheckCircle, Loader, ExternalLink } from 'lucide-react';
 
 interface VideoInfo {
   title: string;
@@ -17,6 +17,7 @@ const App = () => {
   const [message, setMessage] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState('');
 
   // Validate YouTube URL
   const isValidYouTubeUrl = (url: string) => {
@@ -62,7 +63,7 @@ const App = () => {
 
       setVideoInfo(data.video_info);
       setStatus('success');
-      setMessage('Video information retrieved! Choose a download method below.');
+      setMessage('✅ Video ready for download!');
       
     } catch (error) {
       setStatus('error');
@@ -70,155 +71,88 @@ const App = () => {
     }
   };
 
-  // Get a fresh download URL optimized for downloading
-  const getDownloadUrl = async () => {
-    try {
-      const response = await fetch('/api/download', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          url,
-          action: 'get_download_url'
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to get download URL');
-      }
-
-      return data;
-    } catch (error) {
-      console.error('Error getting download URL:', error);
-      return null;
-    }
-  };
-
-  // Method 1: Download using fetch and blob (best for smaller videos)
-  const handleBlobDownload = async () => {
-    if (!videoInfo?.download_url) return;
+  // Smart download with automatic fallback
+  const handleSmartDownload = async () => {
+    if (!videoInfo) return;
     
     setIsDownloading(true);
+    setDownloadProgress('Preparing download...');
     
     try {
-      // Get fresh download URL
-      const downloadData = await getDownloadUrl();
-      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
-      
-      setMessage('Starting download...');
-      
-      const response = await fetch(downloadUrl);
-      
-      if (!response.ok) {
-        throw new Error('Download failed');
+      // Method 1: Try blob download for smaller files (< 50MB estimated)
+      const estimatedSize = typeof videoInfo.filesize === 'number' ? videoInfo.filesize : 0;
+      const shouldTryBlob = estimatedSize > 0 && estimatedSize < 50 * 1024 * 1024; // 50MB
+
+      if (shouldTryBlob) {
+        setDownloadProgress('Downloading to your device...');
+        
+        try {
+          // Get fresh download URL
+          const downloadResponse = await fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, action: 'get_download_url' }),
+          });
+          
+          const downloadData = await downloadResponse.json();
+          const downloadUrl = downloadData?.download_url || videoInfo.download_url;
+          
+          const response = await fetch(downloadUrl);
+          
+          if (!response.ok) throw new Error('Download failed');
+          
+          const blob = await response.blob();
+          const objUrl = window.URL.createObjectURL(blob);
+          
+          const link = document.createElement('a');
+          link.href = objUrl;
+          link.download = `${videoInfo.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          window.URL.revokeObjectURL(objUrl);
+          setDownloadProgress('✅ Download completed!');
+          
+          setTimeout(() => setDownloadProgress(''), 3000);
+          return; // Success, exit here
+          
+        } catch (blobError) {
+          console.log('Blob download failed, trying fallback method...');
+          setDownloadProgress('Trying alternative download method...');
+        }
       }
       
-      const blob = await response.blob();
-      const objUrl = window.URL.createObjectURL(blob);
+      // Method 2: Fallback to direct link (works for larger files)
+      setDownloadProgress('Opening download link...');
       
+      const downloadResponse = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, action: 'get_download_url' }),
+      });
+      
+      const downloadData = await downloadResponse.json();
+      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
+      
+      // Open in new tab with download attributes
       const link = document.createElement('a');
-      link.href = objUrl;
+      link.href = downloadUrl;
       link.download = `${videoInfo.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      window.URL.revokeObjectURL(objUrl);
-      setMessage('Download completed successfully!');
+      setDownloadProgress('✅ Download started in new tab!');
+      setTimeout(() => setDownloadProgress(''), 3000);
       
     } catch (error) {
-      console.error('Blob download failed:', error);
-      setMessage('Blob download failed. Try one of the other methods.');
+      console.error('All download methods failed:', error);
+      setDownloadProgress('❌ Download failed. Try viewing the original video.');
     } finally {
       setIsDownloading(false);
-    }
-  };
-
-  // Method 2: Open direct download link in new tab
-  const handleDirectLinkDownload = async () => {
-    if (!videoInfo) return;
-    
-    setIsDownloading(true);
-    
-    try {
-      // Get fresh download URL
-      const downloadData = await getDownloadUrl();
-      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
-      
-      window.open(downloadUrl, '_blank');
-      setMessage('Download link opened in new tab');
-      
-    } catch (error) {
-      console.error('Direct link failed:', error);
-      // Fallback to original URL
-      window.open(videoInfo.download_url, '_blank');
-      setMessage('Fallback download link opened');
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
-  // Method 3: Use proxy download for better CORS handling
-  const handleProxyDownload = async () => {
-    if (!videoInfo) return;
-    
-    setIsDownloading(true);
-    
-    try {
-      const downloadData = await getDownloadUrl();
-      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
-      const filename = `${videoInfo.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
-      
-      // Create a form that submits to proxy download
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = '/api/proxy-download';
-      form.style.display = 'none';
-      
-      const urlInput = document.createElement('input');
-      urlInput.type = 'hidden';
-      urlInput.name = 'download_url';
-      urlInput.value = downloadUrl;
-      
-      const filenameInput = document.createElement('input');
-      filenameInput.type = 'hidden';
-      filenameInput.name = 'filename';
-      filenameInput.value = filename;
-      
-      form.appendChild(urlInput);
-      form.appendChild(filenameInput);
-      document.body.appendChild(form);
-      form.submit();
-      document.body.removeChild(form);
-      
-      setMessage('Proxy download initiated');
-      
-    } catch (error) {
-      console.error('Proxy download failed:', error);
-      setMessage('Proxy download failed');
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
-  // Method 4: Copy download URL to clipboard
-  const handleCopyUrl = async () => {
-    if (!videoInfo) return;
-    
-    try {
-      const downloadData = await getDownloadUrl();
-      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
-      
-      await navigator.clipboard.writeText(downloadUrl);
-      setMessage('Download URL copied to clipboard! You can paste it in a download manager.');
-      setTimeout(() => setMessage('Video information retrieved! Choose a download method below.'), 5000);
-      
-    } catch (error) {
-      console.error('Copy failed:', error);
-      setMessage('Failed to copy URL');
     }
   };
 
@@ -265,7 +199,7 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-3xl">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-4">
@@ -275,7 +209,7 @@ const App = () => {
             YouTube Downloader
           </h1>
           <p className="text-gray-600">
-            Download YouTube videos using yt-dlp (fast & reliable)
+            Fast & reliable YouTube video downloads
           </p>
         </div>
 
@@ -315,10 +249,11 @@ const App = () => {
           </div>
         )}
 
-        {/* Video Info */}
+        {/* Video Info & Download */}
         {videoInfo && status === 'success' && (
-          <div className="mt-6 p-6 bg-gray-50 rounded-lg">
-            <div className="flex gap-4 mb-6">
+          <div className="mt-6 p-6 bg-gray-50 rounded-lg space-y-6">
+            {/* Video Preview */}
+            <div className="flex gap-4">
               {videoInfo.thumbnail && (
                 <img 
                   src={videoInfo.thumbnail} 
@@ -331,83 +266,58 @@ const App = () => {
                   {videoInfo.title}
                 </h3>
                 <div className="space-y-1 text-sm text-gray-600">
-                  <p><span className="font-medium">Uploader:</span> {videoInfo.uploader}</p>
+                  <p><span className="font-medium">Channel:</span> {videoInfo.uploader}</p>
                   <p><span className="font-medium">Duration:</span> {videoInfo.duration}</p>
                   <p><span className="font-medium">Size:</span> {formatFileSize(videoInfo.filesize)}</p>
                 </div>
               </div>
             </div>
             
-            {/* Download Methods */}
+            {/* Download Section */}
             <div className="space-y-4">
-              <h4 className="font-medium text-gray-700">Download Methods:</h4>
+              {/* Main Download Button */}
+              <button 
+                onClick={handleSmartDownload}
+                disabled={isDownloading}
+                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-semibold py-4 px-6 rounded-lg transition-colors flex items-center justify-center gap-3 text-lg"
+              >
+                {isDownloading ? (
+                  <>
+                    <Loader className="animate-spin" size={24} />
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download size={24} />
+                    Download Video
+                  </>
+                )}
+              </button>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* Method 1: Blob Download */}
-                <button 
-                  onClick={handleBlobDownload}
-                  disabled={isDownloading}
-                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  {isDownloading ? (
-                    <>
-                      <Loader className="animate-spin" size={18} />
-                      Downloading...
-                    </>
-                  ) : (
-                    <>
-                      <Download size={18} />
-                      Save to Device
-                    </>
-                  )}
-                </button>
-                
-                {/* Method 2: Direct Link */}
-                <button 
-                  onClick={handleDirectLinkDownload}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <ExternalLink size={18} />
-                  Open Direct Link
-                </button>
-                
-                {/* Method 3: Proxy Download */}
-                <button 
-                  onClick={handleProxyDownload}
-                  className="bg-purple-600 hover:bg-purple-700 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Download size={18} />
-                  Proxy Download
-                </button>
-                
-                {/* Method 4: Copy URL */}
-                <button 
-                  onClick={handleCopyUrl}
-                  className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Copy size={18} />
-                  Copy Download URL
-                </button>
-              </div>
+              {/* Download Progress */}
+              {downloadProgress && (
+                <div className="text-center text-sm text-gray-600 font-medium">
+                  {downloadProgress}
+                </div>
+              )}
               
-              {/* Additional Actions */}
-              <div className="flex gap-2 mt-4">
+              {/* Alternative Action */}
+              <div className="flex justify-center">
                 <button 
                   onClick={() => window.open(`https://www.youtube.com/watch?v=${videoInfo.video_id}`, '_blank')}
-                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                  className="text-gray-500 hover:text-gray-700 text-sm flex items-center gap-1 transition-colors"
                 >
-                  <Youtube size={16} />
-                  View Original
+                  <ExternalLink size={16} />
+                  View on YouTube
                 </button>
               </div>
               
-              {/* Method Explanations */}
-              <div className="text-xs text-gray-500 space-y-1 mt-4 p-3 bg-gray-100 rounded-lg">
-                <p><strong>💡 Download Method Tips:</strong></p>
-                <p><strong>Save to Device:</strong> Downloads directly to your computer (best for small-medium videos)</p>
-                <p><strong>Open Direct Link:</strong> Opens download URL in new tab (good for all sizes)</p>
-                <p><strong>Proxy Download:</strong> Uses server proxy to bypass restrictions</p>
-                <p><strong>Copy URL:</strong> Copy link for external download managers (best for large files)</p>
+              {/* Info Box */}
+              <div className="text-xs text-gray-500 bg-gray-100 rounded-lg p-3">
+                <p><strong>💡 How it works:</strong></p>
+                <p>Our smart downloader automatically chooses the best method for your video. 
+                For smaller videos, it downloads directly to your device. For larger videos, 
+                it opens a download link in a new tab.</p>
               </div>
             </div>
           </div>
@@ -416,7 +326,7 @@ const App = () => {
         {/* Footer */}
         <div className="mt-8 text-center">
           <p className="text-xs text-gray-500">
-            Powered by yt-dlp • Respect content creators and YouTube's Terms of Service
+            Powered by yt-dlp • Please respect content creators and YouTube's Terms of Service
           </p>
         </div>
       </div>
