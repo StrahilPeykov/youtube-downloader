@@ -146,7 +146,16 @@ const App = () => {
       
     } catch (error) {
       setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Download failed. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Download failed. Please try again.';
+      
+      // Handle specific YouTube bot detection error
+      if (errorMessage.includes('Sign in to confirm you\'re not a bot')) {
+        setMessage('⚠️ YouTube detected automated access. Try again in a few minutes, or try a different video.');
+      } else if (errorMessage.includes('Video unavailable')) {
+        setMessage('❌ This video is not available for download (private, deleted, or restricted).');
+      } else {
+        setMessage(`❌ ${errorMessage}`);
+      }
     }
   };
 

@@ -5,6 +5,8 @@ import os
 import tempfile
 import uuid
 import base64
+import time
+import random
 from http.server import BaseHTTPRequestHandler
 
 class handler(BaseHTTPRequestHandler):
@@ -40,13 +42,34 @@ class handler(BaseHTTPRequestHandler):
                 }).encode('utf-8'))
                 return
 
+            # Add random delay to avoid detection
+            time.sleep(random.uniform(0.5, 2.0))
+
             if action == 'info':
-                # Get video info (current behavior)
+                # Enhanced yt-dlp options to avoid bot detection
                 ydl_opts = {
                     'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
                     'noplaylist': True,
                     'quiet': True,
                     'no_warnings': True,
+                    'extract_flat': False,
+                    'cookiefile': None,  # You can add a cookies file path here if you have one
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'referer': 'https://www.youtube.com/',
+                    'headers': {
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Accept-Encoding': 'gzip,deflate',
+                        'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                        'Keep-Alive': '300',
+                        'Connection': 'keep-alive',
+                    },
+                    'sleep_interval': 1,
+                    'max_sleep_interval': 5,
+                    'sleep_interval_subtitles': 1,
+                    'extractor_retries': 3,
+                    'file_access_retries': 3,
+                    'fragment_retries': 3,
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -105,13 +128,28 @@ class handler(BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps(response).encode('utf-8'))
 
             elif action == 'get_download_url':
-                # Get a fresh download URL that works better for downloads
+                # Enhanced options for getting download URL
                 ydl_opts = {
                     'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
                     'noplaylist': True,
                     'quiet': True,
                     'no_warnings': True,
                     'extract_flat': False,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'referer': 'https://www.youtube.com/',
+                    'headers': {
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Accept-Encoding': 'gzip,deflate',
+                        'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                        'Keep-Alive': '300',
+                        'Connection': 'keep-alive',
+                    },
+                    'sleep_interval': random.uniform(1, 3),
+                    'max_sleep_interval': 8,
+                    'extractor_retries': 5,
+                    'file_access_retries': 5,
+                    'fragment_retries': 5,
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -160,9 +198,29 @@ class handler(BaseHTTPRequestHandler):
 
                     self.wfile.write(json.dumps(response).encode('utf-8'))
 
+        except yt_dlp.DownloadError as e:
+            error_msg = str(e)
+            if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+                error_response = {
+                    'error': 'YouTube is currently blocking automated requests. Please try again in a few minutes, or try a different video.'
+                }
+            elif 'Video unavailable' in error_msg:
+                error_response = {
+                    'error': 'This video is unavailable (may be private, deleted, or region-restricted).'
+                }
+            elif 'age-restricted' in error_msg.lower():
+                error_response = {
+                    'error': 'This video is age-restricted and cannot be downloaded without signing in.'
+                }
+            else:
+                error_response = {
+                    'error': f'YouTube error: {error_msg}'
+                }
+            self.wfile.write(json.dumps(error_response).encode('utf-8'))
+        
         except Exception as e:
             error_response = {
-                'error': f'Error processing video: {str(e)}'
+                'error': f'Server error: {str(e)}'
             }
             self.wfile.write(json.dumps(error_response).encode('utf-8'))
 

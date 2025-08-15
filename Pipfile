@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-yt-dlp = "==2024.8.6"
+yt-dlp = "*"
 requests = "*"
 
 [dev-packages]
