@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Download, Youtube, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 
 interface VideoInfo {
