@@ -16,8 +16,6 @@ const App = () => {
   const [status, setStatus] = useState('idle'); // idle, loading, success, error
   const [message, setMessage] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState('');
 
   // Validate YouTube URL
   const isValidYouTubeUrl = (url: string) => {
@@ -25,8 +23,8 @@ const App = () => {
     return youtubeRegex.test(url);
   };
 
-  // Handle getting video info
-  const handleGetInfo = async () => {
+  // One-click download
+  const handleDownload = async () => {
     if (!url.trim()) {
       setStatus('error');
       setMessage('Please enter a YouTube URL');
@@ -40,11 +38,12 @@ const App = () => {
     }
 
     setStatus('loading');
-    setMessage('Processing video...');
+    setMessage('Getting video info...');
     setVideoInfo(null);
 
     try {
-      const response = await fetch('/api/download', {
+      // Step 1: Get video info
+      const infoResponse = await fetch('/api/download', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,47 +54,44 @@ const App = () => {
         }),
       });
 
-      const data = await response.json();
+      const infoData = await infoResponse.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to process video');
+      if (!infoResponse.ok) {
+        throw new Error(infoData.error || 'Failed to process video');
       }
 
-      setVideoInfo(data.video_info);
-      setStatus('success');
-      setMessage('✅ Video ready for download!');
-      
-    } catch (error) {
-      setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Failed to process video. Please try again.');
-    }
-  };
+      const info = infoData.video_info;
+      setVideoInfo(info);
+      setMessage('Starting download...');
 
-  // Smart download with automatic fallback
-  const handleSmartDownload = async () => {
-    if (!videoInfo) return;
-    
-    setIsDownloading(true);
-    setDownloadProgress('Preparing download...');
-    
-    try {
-      // Method 1: Try blob download for smaller files (< 50MB estimated)
-      const estimatedSize = typeof videoInfo.filesize === 'number' ? videoInfo.filesize : 0;
+      // Step 2: Get download URL and start download
+      const downloadResponse = await fetch('/api/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          url,
+          action: 'get_download_url'
+        }),
+      });
+
+      const downloadData = await downloadResponse.json();
+
+      if (!downloadResponse.ok) {
+        throw new Error(downloadData.error || 'Failed to get download URL');
+      }
+
+      const downloadUrl = downloadData.download_url;
+      const filename = `${info.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+
+      // Step 3: Try direct download first
+      const estimatedSize = typeof info.filesize === 'number' ? info.filesize : 0;
       const shouldTryBlob = estimatedSize > 0 && estimatedSize < 50 * 1024 * 1024; // 50MB
 
       if (shouldTryBlob) {
-        setDownloadProgress('Downloading to your device...');
-        
         try {
-          // Get fresh download URL
-          const downloadResponse = await fetch('/api/download', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, action: 'get_download_url' }),
-          });
-          
-          const downloadData = await downloadResponse.json();
-          const downloadUrl = downloadData?.download_url || videoInfo.download_url;
+          setMessage('Downloading video...');
           
           const response = await fetch(downloadUrl);
           
@@ -106,53 +102,39 @@ const App = () => {
           
           const link = document.createElement('a');
           link.href = objUrl;
-          link.download = `${videoInfo.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+          link.download = filename;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
           
           window.URL.revokeObjectURL(objUrl);
-          setDownloadProgress('✅ Download completed!');
           
-          setTimeout(() => setDownloadProgress(''), 3000);
-          return; // Success, exit here
+          setStatus('success');
+          setMessage('✅ Download completed successfully!');
+          return;
           
         } catch (blobError) {
-          console.log('Blob download failed, trying fallback method...');
-          setDownloadProgress('Trying alternative download method...');
+          console.log('Direct download failed, trying alternative...');
+          setMessage('Trying alternative download method...');
         }
       }
-      
-      // Method 2: Fallback to direct link (works for larger files)
-      setDownloadProgress('Opening download link...');
-      
-      const downloadResponse = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, action: 'get_download_url' }),
-      });
-      
-      const downloadData = await downloadResponse.json();
-      const downloadUrl = downloadData?.download_url || videoInfo.download_url;
-      
-      // Open in new tab with download attributes
+
+      // Step 4: Fallback to opening download link
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `${videoInfo.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+      link.download = filename;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      setDownloadProgress('✅ Download started in new tab!');
-      setTimeout(() => setDownloadProgress(''), 3000);
+      setStatus('success');
+      setMessage('✅ Download started! Check your downloads folder or browser.');
       
     } catch (error) {
-      console.error('All download methods failed:', error);
-      setDownloadProgress('❌ Download failed. Try viewing the original video.');
-    } finally {
-      setIsDownloading(false);
+      setStatus('error');
+      setMessage(error instanceof Error ? error.message : 'Download failed. Please try again.');
     }
   };
 
@@ -209,7 +191,7 @@ const App = () => {
             YouTube Downloader
           </h1>
           <p className="text-gray-600">
-            Fast & reliable YouTube video downloads
+            Paste a link, click download, done!
           </p>
         </div>
 
@@ -227,17 +209,26 @@ const App = () => {
               placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none transition-all"
               disabled={status === 'loading'}
-              onKeyPress={(e) => e.key === 'Enter' && handleGetInfo()}
+              onKeyPress={(e) => e.key === 'Enter' && handleDownload()}
             />
           </div>
 
           <button
-            onClick={handleGetInfo}
+            onClick={handleDownload}
             disabled={status === 'loading'}
-            className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-semibold py-4 px-6 rounded-lg transition-colors flex items-center justify-center gap-3 text-lg"
           >
-            <Download size={20} />
-            {status === 'loading' ? 'Processing...' : 'Get Video Info'}
+            {status === 'loading' ? (
+              <>
+                <Loader className="animate-spin" size={24} />
+                Downloading...
+              </>
+            ) : (
+              <>
+                <Download size={24} />
+                Download Video
+              </>
+            )}
           </button>
         </div>
 
@@ -249,60 +240,29 @@ const App = () => {
           </div>
         )}
 
-        {/* Video Info & Download */}
-        {videoInfo && status === 'success' && (
-          <div className="mt-6 p-6 bg-gray-50 rounded-lg space-y-6">
-            {/* Video Preview */}
+        {/* Video Info (shown during/after download) */}
+        {videoInfo && (
+          <div className="mt-6 p-6 bg-gray-50 rounded-lg">
             <div className="flex gap-4">
               {videoInfo.thumbnail && (
                 <img 
                   src={videoInfo.thumbnail} 
                   alt="Video thumbnail"
-                  className="w-32 h-24 object-cover rounded-lg flex-shrink-0"
+                  className="w-24 h-18 object-cover rounded-lg flex-shrink-0"
                 />
               )}
               <div className="flex-1">
-                <h3 className="font-semibold text-gray-800 mb-2 leading-tight">
+                <h3 className="font-semibold text-gray-800 mb-1 leading-tight text-sm">
                   {videoInfo.title}
                 </h3>
-                <div className="space-y-1 text-sm text-gray-600">
-                  <p><span className="font-medium">Channel:</span> {videoInfo.uploader}</p>
-                  <p><span className="font-medium">Duration:</span> {videoInfo.duration}</p>
-                  <p><span className="font-medium">Size:</span> {formatFileSize(videoInfo.filesize)}</p>
+                <div className="space-y-0.5 text-xs text-gray-600">
+                  <p>{videoInfo.uploader} • {videoInfo.duration} • {formatFileSize(videoInfo.filesize)}</p>
                 </div>
               </div>
             </div>
             
-            {/* Download Section */}
-            <div className="space-y-4">
-              {/* Main Download Button */}
-              <button 
-                onClick={handleSmartDownload}
-                disabled={isDownloading}
-                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-semibold py-4 px-6 rounded-lg transition-colors flex items-center justify-center gap-3 text-lg"
-              >
-                {isDownloading ? (
-                  <>
-                    <Loader className="animate-spin" size={24} />
-                    Downloading...
-                  </>
-                ) : (
-                  <>
-                    <Download size={24} />
-                    Download Video
-                  </>
-                )}
-              </button>
-              
-              {/* Download Progress */}
-              {downloadProgress && (
-                <div className="text-center text-sm text-gray-600 font-medium">
-                  {downloadProgress}
-                </div>
-              )}
-              
-              {/* Alternative Action */}
-              <div className="flex justify-center">
+            {status === 'success' && (
+              <div className="mt-4 flex justify-center">
                 <button 
                   onClick={() => window.open(`https://www.youtube.com/watch?v=${videoInfo.video_id}`, '_blank')}
                   className="text-gray-500 hover:text-gray-700 text-sm flex items-center gap-1 transition-colors"
@@ -311,15 +271,24 @@ const App = () => {
                   View on YouTube
                 </button>
               </div>
-              
-              {/* Info Box */}
-              <div className="text-xs text-gray-500 bg-gray-100 rounded-lg p-3">
-                <p><strong>💡 How it works:</strong></p>
-                <p>Our smart downloader automatically chooses the best method for your video. 
-                For smaller videos, it downloads directly to your device. For larger videos, 
-                it opens a download link in a new tab.</p>
-              </div>
-            </div>
+            )}
+          </div>
+        )}
+
+        {/* Reset button after success */}
+        {status === 'success' && (
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => {
+                setUrl('');
+                setStatus('idle');
+                setMessage('');
+                setVideoInfo(null);
+              }}
+              className="text-red-600 hover:text-red-700 font-medium text-sm"
+            >
+              Download Another Video
+            </button>
           </div>
         )}
 
