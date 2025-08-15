@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 yt-dlp = "==2024.8.6"
+requests = "*"
 
 [dev-packages]
 

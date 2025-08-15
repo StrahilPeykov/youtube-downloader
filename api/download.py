@@ -1,8 +1,11 @@
 import json
 import yt_dlp
 import re
+import os
+import tempfile
+import uuid
+import base64
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -21,6 +24,7 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(post_data.decode('utf-8'))
             
             url = data.get('url', '').strip()
+            action = data.get('action', 'info')  # 'info' or 'get_download_url'
             
             if not url:
                 self.wfile.write(json.dumps({
@@ -36,68 +40,125 @@ class handler(BaseHTTPRequestHandler):
                 }).encode('utf-8'))
                 return
 
-            # Configure yt-dlp options
-            ydl_opts = {
-                'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
-                'noplaylist': True,
-                'extractaudio': False,
-                'audioformat': 'mp3',
-                'ignoreerrors': True,
-                'no_warnings': True,
-                'quiet': True,
-            }
+            if action == 'info':
+                # Get video info (current behavior)
+                ydl_opts = {
+                    'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
+                    'noplaylist': True,
+                    'quiet': True,
+                    'no_warnings': True,
+                }
 
-            # Extract video information
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                if not info:
-                    self.wfile.write(json.dumps({
-                        'error': 'Could not extract video information'
-                    }).encode('utf-8'))
-                    return
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    if not info:
+                        self.wfile.write(json.dumps({
+                            'error': 'Could not extract video information'
+                        }).encode('utf-8'))
+                        return
 
-                # Format duration
-                duration_seconds = info.get('duration', 0)
-                if duration_seconds:
-                    minutes = duration_seconds // 60
-                    seconds = duration_seconds % 60
-                    duration_str = f"{minutes}:{seconds:02d}"
-                else:
-                    duration_str = "Unknown"
+                    # Format duration
+                    duration_seconds = info.get('duration', 0)
+                    if duration_seconds:
+                        minutes = duration_seconds // 60
+                        seconds = duration_seconds % 60
+                        duration_str = f"{minutes}:{seconds:02d}"
+                    else:
+                        duration_str = "Unknown"
 
-                # Get the best quality download URL
-                formats = info.get('formats', [])
-                download_url = None
-                
-                # Try to find best mp4 format
-                for fmt in reversed(formats):
-                    if fmt.get('ext') == 'mp4' and fmt.get('url'):
-                        download_url = fmt['url']
-                        break
-                
-                # Fallback to any format with URL
-                if not download_url:
+                    # Get the best direct download URL
+                    formats = info.get('formats', [])
+                    download_url = None
+                    
+                    # Try to find best mp4 format with working URL
                     for fmt in reversed(formats):
-                        if fmt.get('url'):
+                        if (fmt.get('ext') == 'mp4' and 
+                            fmt.get('url') and 
+                            fmt.get('vcodec') != 'none'):
                             download_url = fmt['url']
                             break
+                    
+                    # Fallback to any working video format
+                    if not download_url:
+                        for fmt in reversed(formats):
+                            if (fmt.get('url') and 
+                                fmt.get('vcodec') != 'none'):
+                                download_url = fmt['url']
+                                break
 
-                # Prepare response
-                video_info = {
-                    'title': info.get('title', 'Unknown Title'),
-                    'duration': duration_str,
-                    'thumbnail': info.get('thumbnail', ''),
-                    'uploader': info.get('uploader', 'Unknown'),
-                    'download_url': download_url or info.get('webpage_url', url)
+                    video_info = {
+                        'title': info.get('title', 'Unknown Title'),
+                        'duration': duration_str,
+                        'thumbnail': info.get('thumbnail', ''),
+                        'uploader': info.get('uploader', 'Unknown'),
+                        'video_id': info.get('id', ''),
+                        'download_url': download_url or info.get('webpage_url', url),
+                        'filesize': info.get('filesize') or info.get('filesize_approx', 'Unknown')
+                    }
+
+                    response = {
+                        'success': True,
+                        'video_info': video_info
+                    }
+
+                    self.wfile.write(json.dumps(response).encode('utf-8'))
+
+            elif action == 'get_download_url':
+                # Get a fresh download URL that works better for downloads
+                ydl_opts = {
+                    'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
+                    'noplaylist': True,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': False,
                 }
 
-                response = {
-                    'success': True,
-                    'video_info': video_info
-                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    if not info:
+                        self.wfile.write(json.dumps({
+                            'error': 'Could not extract download URL'
+                        }).encode('utf-8'))
+                        return
+                    
+                    # Get the best format for downloading
+                    formats = info.get('formats', [])
+                    best_format = None
+                    
+                    # Find the best mp4 format
+                    for fmt in reversed(formats):
+                        if (fmt.get('ext') == 'mp4' and 
+                            fmt.get('url') and 
+                            fmt.get('vcodec') != 'none' and
+                            fmt.get('acodec') != 'none'):  # Has both video and audio
+                            best_format = fmt
+                            break
+                    
+                    if not best_format:
+                        # Fallback to any good format
+                        for fmt in reversed(formats):
+                            if fmt.get('url') and fmt.get('vcodec') != 'none':
+                                best_format = fmt
+                                break
+                    
+                    if not best_format:
+                        self.wfile.write(json.dumps({
+                            'error': 'No suitable download format found'
+                        }).encode('utf-8'))
+                        return
+                    
+                    response = {
+                        'success': True,
+                        'download_url': best_format['url'],
+                        'filename': f"{info.get('title', 'video')}.{best_format.get('ext', 'mp4')}",
+                        'filesize': best_format.get('filesize') or best_format.get('filesize_approx'),
+                        'format_note': best_format.get('format_note', ''),
+                        'quality': best_format.get('height', 'Unknown')
+                    }
 
-                self.wfile.write(json.dumps(response).encode('utf-8'))
+                    self.wfile.write(json.dumps(response).encode('utf-8'))
 
         except Exception as e:
             error_response = {
