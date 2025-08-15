@@ -55,12 +55,23 @@ const App = () => {
       });
 
       const infoData = await infoResponse.json();
+      console.log('Video info response:', infoData);
 
       if (!infoResponse.ok) {
         throw new Error(infoData.error || 'Failed to process video');
       }
 
+      if (!infoData.video_info) {
+        throw new Error('No video information returned from server');
+      }
+
       const info = infoData.video_info;
+      
+      if (!info.title) {
+        console.warn('Video info missing title:', info);
+        throw new Error('Video information incomplete - missing title');
+      }
+      
       setVideoInfo(info);
       setMessage('Starting download...');
 
@@ -83,7 +94,8 @@ const App = () => {
       }
 
       const downloadUrl = downloadData.download_url;
-      const filename = `${info.title.replace(/[^a-zA-Z0-9\s\-_\.]/g, '_')}.mp4`;
+      const safeTitle = (info.title || 'video').replace(/[^a-zA-Z0-9\s\-_\.]/g, '_');
+      const filename = `${safeTitle}.mp4`;
 
       // Step 3: Try direct download first
       const estimatedSize = typeof info.filesize === 'number' ? info.filesize : 0;
@@ -241,7 +253,7 @@ const App = () => {
         )}
 
         {/* Video Info (shown during/after download) */}
-        {videoInfo && (
+        {videoInfo && videoInfo.title && (
           <div className="mt-6 p-6 bg-gray-50 rounded-lg">
             <div className="flex gap-4">
               {videoInfo.thumbnail && (
@@ -256,7 +268,7 @@ const App = () => {
                   {videoInfo.title}
                 </h3>
                 <div className="space-y-0.5 text-xs text-gray-600">
-                  <p>{videoInfo.uploader} • {videoInfo.duration} • {formatFileSize(videoInfo.filesize)}</p>
+                  <p>{videoInfo.uploader || 'Unknown'} • {videoInfo.duration || 'Unknown'} • {formatFileSize(videoInfo.filesize)}</p>
                 </div>
               </div>
             </div>
@@ -264,7 +276,7 @@ const App = () => {
             {status === 'success' && (
               <div className="mt-4 flex justify-center">
                 <button 
-                  onClick={() => window.open(`https://www.youtube.com/watch?v=${videoInfo.video_id}`, '_blank')}
+                  onClick={() => window.open(`https://www.youtube.com/watch?v=${videoInfo.video_id || ''}`, '_blank')}
                   className="text-gray-500 hover:text-gray-700 text-sm flex items-center gap-1 transition-colors"
                 >
                   <ExternalLink size={16} />
